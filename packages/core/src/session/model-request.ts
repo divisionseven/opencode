@@ -76,6 +76,7 @@ export const baseTranscript = (input: {
   readonly tools: Tool.Snapshot
   readonly initial: string
   readonly messages: ReadonlyArray<SessionMessage.Info>
+  readonly stripReasoningBlobs?: boolean
 }) => {
   const providerMetadataKey = input.model.model.route.providerMetadataKey ?? input.model.model.provider
   return {
@@ -88,7 +89,7 @@ export const baseTranscript = (input: {
     ]
       .filter((part) => part.length > 0)
       .map(SystemPart.make),
-    messages: toLLMMessages(input.messages, input.model.ref, providerMetadataKey),
+    messages: toLLMMessages(input.messages, input.model.ref, providerMetadataKey, input.stripReasoningBlobs ?? false),
   }
 }
 

@@ -840,6 +840,38 @@ Recent work
     ])
   })
 
+  test("strips reasoning blobs for a stale-reasoning retry", () => {
+    const assistant = SessionMessage.Assistant.make({
+      id: id("assistant-stale-reasoning"),
+      type: "assistant",
+      agent: build,
+      model: { id: Model.ID.make("model"), providerID: Provider.ID.make("provider") },
+      content: [
+        SessionMessage.AssistantReasoning.make({
+          type: "reasoning",
+          text: "Think",
+          state: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" },
+        }),
+      ],
+      time: { created, completed: created },
+    })
+
+    expect(toLLMMessages([assistant], model, "provider", true)[0]?.content).toEqual([
+      {
+        type: "reasoning",
+        text: "Think",
+        providerMetadata: { provider: { itemId: "rs_1", reasoningEncryptedContent: null } },
+      },
+    ])
+    expect(toLLMMessages([assistant], model, "provider", false)[0]?.content).toEqual([
+      {
+        type: "reasoning",
+        text: "Think",
+        providerMetadata: { provider: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" } },
+      },
+    ])
+  })
+
   test("replays flat state under an OpenCode hosted model's route key", () => {
     const opencode = Model.Ref.make({ id: Model.ID.make("claude-fable-5"), providerID: Provider.ID.opencode })
     const messages = toLLMMessages(

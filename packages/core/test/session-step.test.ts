@@ -1,5 +1,5 @@
 import { expect } from "bun:test"
-import { LanguageModel, LLM, LLMEvent } from "@opencode/ai"
+import { AIError, LanguageModel, LLM, LLMEvent, ProviderInternalError } from "@opencode/ai"
 import { OpenAIChat } from "@opencode/ai/protocols/openai-chat"
 import { TestLLM } from "@opencode/ai/testing"
 import { Agent } from "@opencode/core/agent"
@@ -157,3 +157,98 @@ for (const fixture of [
     }),
   )
 }
+
+const staleFailure = () =>
+  new AIError({
+    reason: new ProviderInternalError({ message: "Invalid encrypted content (invalid_encrypted_content)" }),
+  })
+
+const staleDecision = { retry: true as const, attempt: 2, delay: 0 }
+const staleError = { type: "provider.internal", message: staleFailure().message }
+
+const attemptStale = (input: { events: ReadonlyArray<LLMEvent>; stripAttempted?: boolean }) =>
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const llm = yield* TestLLM.Test
+    const sessionID = Session.ID.create()
+    const assistantMessageID = SessionMessage.ID.create()
+    const start = Snapshot.ID.make("before")
+    const end = Snapshot.ID.make("after")
+    let captures = 0
+    const steps = yield* SessionStep.make.pipe(
+      Effect.provide(
+        Layer.mock(Snapshot.Service)({
+          capture: () => Effect.sync(() => (captures++ === 0 ? start : end)),
+          files: () => Effect.succeed([]),
+        }),
+      ),
+    )
+    yield* db
+      .insert(ProjectTable)
+      .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+      .run()
+    yield* db
+      .insert(SessionTable)
+      .values({ id: sessionID, project_id: Project.ID.global, slug: "step", directory: "/project", version: "test" })
+      .run()
+    const model = SessionRunnerModel.resolved(
+      LanguageModel.make({ id: "test-model", provider: "test", route: OpenAIChat.route }),
+      {
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        limit: { context: 100_000, output: 1_000 },
+        cost: [
+          {
+            input: Money.USDPerMillionTokens.make(1),
+            output: Money.USDPerMillionTokens.make(2),
+            cache: { read: Money.USDPerMillionTokens.make(0.1), write: Money.USDPerMillionTokens.make(0.5) },
+          },
+        ],
+      },
+    )
+    yield* llm.push(TestLLM.failAfter(staleFailure(), ...input.events))
+    return yield* steps.attempt({
+      sessionID,
+      assistantMessageID,
+      agent: Agent.defaultID,
+      model,
+      prepared: {
+        retry: () => Effect.void,
+        request: LLM.request({ model: model.model, prompt: "Retry stale blobs" }),
+        options: {},
+        executeTool: () =>
+          Effect.sync(() => {
+            return { content: [{ type: "text", text: "Completed tool" }] }
+          }),
+      },
+      retry: () => Effect.succeed(staleDecision),
+      recoverContinuation: true,
+      recoverOverflow: Effect.succeed(false),
+      stripAttempted: input.stripAttempted,
+    })
+  })
+
+it.effect("retries stale reasoning blobs before output", () =>
+  Effect.gen(function* () {
+    const result = yield* attemptStale({ events: [] })
+
+    expect(result).toEqual(SessionStep.Outcome.StaleReasoningRetry({ error: staleError, decision: staleDecision }))
+  }),
+)
+
+it.effect("does not retry stale reasoning blobs twice", () =>
+  Effect.gen(function* () {
+    const result = yield* attemptStale({ events: [], stripAttempted: true })
+
+    expect(result).toEqual(SessionStep.Outcome.Retry({ error: staleError, decision: staleDecision }))
+  }),
+)
+
+it.effect("does not retry stale reasoning blobs once output started", () =>
+  Effect.gen(function* () {
+    const result = yield* attemptStale({
+      events: [LLMEvent.textStart({ id: "text" }), LLMEvent.textDelta({ id: "text", text: "Hi" })],
+    })
+
+    expect(result).toEqual(SessionStep.Outcome.Continue({ error: staleError, decision: staleDecision }))
+  }),
+)

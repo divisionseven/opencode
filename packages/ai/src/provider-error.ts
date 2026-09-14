@@ -58,6 +58,14 @@ export const isContextOverflowFailure = (failure: unknown) =>
     ? failure.reason._tag === "InvalidRequest" && failure.reason.classification === "context-overflow"
     : Schema.is(ProviderErrorEvent)(failure) && failure.classification === "context-overflow"
 
+const STALE_REASONING_TEXT = /invalid_encrypted_content/i
+
+export const isStaleReasoningFailure = (failure: unknown) =>
+  failure instanceof AIError
+    ? failure.reason._tag === "ProviderInternal" &&
+      STALE_REASONING_TEXT.test([failure.reason.message, failure.reason.body ?? ""].join("\n"))
+    : Schema.is(ProviderErrorEvent)(failure) && STALE_REASONING_TEXT.test(failure.message)
+
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
 const QUOTA_CODES = new Set(["insufficient_quota", "usage_not_included", "billing_error"])
 const AUTH_CODES = new Set(["authentication_error", "permission_error"])
@@ -136,6 +144,11 @@ export function classifyProviderFailure(input: ProviderFailure): AIError["reason
       ...details,
       retryAfterMs: input.retryAfterMs,
       rateLimit: input.rateLimit,
+    })
+  if (codes.includes("invalid_encrypted_content") || STALE_REASONING_TEXT.test(text))
+    return new ProviderInternalError({
+      ...details,
+      retryAfterMs: input.retryAfterMs,
     })
   if (
     input.status === 408 ||

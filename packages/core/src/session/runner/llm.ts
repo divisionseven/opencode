@@ -203,6 +203,7 @@ const layer = Layer.effect(
       let initial: SessionContext.Loaded | undefined = first
       let recoverOverflow = true
       let recoverContinuation = true
+      let stripStaleReasoning = false
       while (true) {
         // Reuse boundary preparation once; retries refresh context without delivering more input.
         const loaded = initial ?? (yield* prepareContext(sessionID).pipe(Effect.flatMap(context.load)))
@@ -225,6 +226,7 @@ const layer = Layer.effect(
           tools: loaded.tools,
           initial: loaded.initial,
           messages: loaded.messages,
+          stripReasoningBlobs: stripStaleReasoning,
         })
         const prepared = yield* context.request.primary({
           session: loaded.session,
@@ -255,6 +257,7 @@ const layer = Layer.effect(
               retry: proposed,
             }),
           recoverContinuation,
+          stripAttempted: stripStaleReasoning,
           recoverOverflow: Effect.suspend(() =>
             recoverOverflow && compaction.enabled()
               ? compaction
@@ -271,6 +274,14 @@ const layer = Layer.effect(
               error: outcome.error,
               assistantMessageID,
             }),
+          StaleReasoningRetry: Effect.fnUntraced(function* (outcome) {
+            yield* retry.wait({
+              decision: outcome.decision,
+              error: outcome.error,
+              assistantMessageID,
+            })
+            stripStaleReasoning = true
+          }),
           Continue: Effect.fnUntraced(function* (outcome) {
             yield* retry.wait({
               decision: outcome.decision,

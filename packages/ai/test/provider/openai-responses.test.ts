@@ -3884,6 +3884,87 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("re-fetches a superseded blob for the same reasoning slot", () =>
+    Effect.gen(function* () {
+      const prepared = yield* compileRequest(
+        LLM.request({
+          id: "req_superseded_reasoning_blob",
+          model,
+          messages: [
+            Message.assistant([
+              {
+                type: "reasoning",
+                text: "First",
+                providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: "old-state" } },
+              },
+              {
+                type: "reasoning",
+                text: "Second",
+                providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: "new-state" } },
+              },
+            ]),
+          ],
+          providerOptions: { store: false },
+        }),
+      )
+
+      // Same-ID parts fold at lowering; the newest blob for the slot wins.
+      expect(prepared.body.input).toEqual([
+        {
+          type: "reasoning",
+          id: "rs_1",
+          summary: [
+            { type: "summary_text", text: "First" },
+            { type: "summary_text", text: "Second" },
+          ],
+          encrypted_content: "new-state",
+        },
+      ])
+    }),
+  )
+
+  it.effect("keeps blobs for distinct reasoning slots", () =>
+    Effect.gen(function* () {
+      const prepared = yield* compileRequest(
+        LLM.request({
+          id: "req_distinct_reasoning_blobs",
+          model,
+          messages: [
+            Message.assistant([
+              {
+                type: "reasoning",
+                text: "First",
+                providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: "blob-1" } },
+              },
+              {
+                type: "reasoning",
+                text: "Second",
+                providerMetadata: { openai: { itemId: "rs_2", reasoningEncryptedContent: "blob-2" } },
+              },
+            ]),
+          ],
+          providerOptions: { store: false },
+        }),
+      )
+
+      // Only same-slot predecessors are nulled; each distinct slot keeps its own blob.
+      expect(prepared.body.input).toEqual([
+        {
+          type: "reasoning",
+          id: "rs_1",
+          summary: [{ type: "summary_text", text: "First" }],
+          encrypted_content: "blob-1",
+        },
+        {
+          type: "reasoning",
+          id: "rs_2",
+          summary: [{ type: "summary_text", text: "Second" }],
+          encrypted_content: "blob-2",
+        },
+      ])
+    }),
+  )
+
   it.effect("replays stateless reasoning without encrypted state", () =>
     Effect.gen(function* () {
       const prepared = yield* compileRequest(

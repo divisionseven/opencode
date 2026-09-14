@@ -774,6 +774,19 @@ const lowerMessages = Effect.fn("OpenResponses.lowerMessages")(function* (
     }
   }
 
+  // A re-issued blob supersedes the same slot; replaying it fails stateless requests.
+  const isStringBlob = (item: LoweredInputItem): item is OpenResponsesReasoningInput =>
+    (item as OpenResponsesReasoningInput).type === "reasoning" &&
+    typeof (item as OpenResponsesReasoningInput).encrypted_content === "string"
+  const lastStringBlobByID = new Map<string | undefined, number>()
+  for (const [index, item] of input.entries()) {
+    if (isStringBlob(item)) lastStringBlobByID.set(item.id, index)
+  }
+  for (const [index, item] of input.entries()) {
+    if (!isStringBlob(item) || index === lastStringBlobByID.get(item.id)) continue
+    input[index] = { ...item, encrypted_content: null }
+  }
+
   return input
 })
 

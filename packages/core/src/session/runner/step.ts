@@ -6,6 +6,7 @@ import {
   LLMClient,
   LLMEvent,
   isContextOverflowFailure,
+  isStaleReasoningFailure,
   type ProviderErrorEvent,
   type ToolCall,
 } from "@opencode/ai"
@@ -32,6 +33,7 @@ import { SessionRunnerRetry } from "./retry.js"
 export type Outcome = Data.TaggedEnum<{
   Completed: { readonly needsContinuation: boolean }
   Retry: { readonly error: SessionError.Error; readonly decision: SessionRunnerRetry.Decision }
+  StaleReasoningRetry: { readonly error: SessionError.Error; readonly decision: SessionRunnerRetry.Decision }
   Continue: {
     readonly error: SessionError.Error
     readonly decision: SessionRunnerRetry.Decision
@@ -55,6 +57,8 @@ interface Input {
   readonly recoverContinuation: boolean
   /** The runner owns compaction policy; the attempt invokes it only before durable output. */
   readonly recoverOverflow: Effect.Effect<boolean>
+  /** Set once the runner has already retried with reasoning blobs stripped. */
+  readonly stripAttempted?: boolean
 }
 
 const TOOLS_INTERRUPTED = { type: "aborted", message: "Tool execution interrupted" } as const
@@ -181,6 +185,11 @@ export const make = Effect.gen(function* () {
               )
             : undefined
         if (llmFailure && llmError && retry?.retry && !recorded.outputStarted) {
+          // Stale blobs retry once with blobs stripped.
+          if (isStaleReasoningFailure(llmFailure) && input.stripAttempted !== true) {
+            yield* publisher.startAssistant()
+            return Outcome.StaleReasoningRetry({ error: llmError, decision: retry })
+          }
           // Retry state projects onto the existing assistant, even before it has produced output.
           yield* publisher.startAssistant()
           return Outcome.Retry({ error: llmError, decision: retry })

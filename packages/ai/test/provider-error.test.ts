@@ -136,6 +136,27 @@ describe("provider error classification", () => {
     ).toEqual(Array(6).fill("InvalidRequest"))
   })
 
+  test("classifies stale reasoning blobs as provider internal", () => {
+    const failures = [
+      classifyProviderFailure({
+        message: "Invalid encrypted content (invalid_encrypted_content): the reasoning blob expired",
+        status: 400,
+      }),
+      classifyProviderFailure({
+        message: "Request failed",
+        status: 400,
+        rawBody: '{"error":{"code":"invalid_encrypted_content","message":"The reasoning blob expired"}}',
+      }),
+      classifyProviderFailure({
+        message: "Request failed",
+        status: 400,
+        rawBody: '{"error":{"type":"invalid_encrypted_content","message":"The reasoning blob expired"}}',
+      }),
+    ]
+
+    expect(failures.map((failure) => failure._tag)).toEqual(Array(3).fill("ProviderInternal"))
+  })
+
   test("classifies nested provider codes when a top-level code is also present", () => {
     expect(
       [
